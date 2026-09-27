@@ -111,6 +111,7 @@ function ProteinViewer({
       },
     );
 
+    // @ts-expect-error: viewerInstance ref type defaults to null
     viewerInstance.current = viewer;
 
     const loadStructure = async () => {

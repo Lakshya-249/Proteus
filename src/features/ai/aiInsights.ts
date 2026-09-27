@@ -41,6 +41,7 @@ interface AIInsightsRequest {
   pdbId: string;
   chainId?: string;
   sequence?: string;
+  forceRefresh?: boolean;
 }
 
 /*
@@ -73,7 +74,7 @@ const API_BASE_URL =
 export async function getAIInsights(
   request: AIInsightsRequest,
 ): Promise<DetailedAIInsights> {
-  const response = await fetch(`${API_BASE_URL}/api/ai/insights`, {
+  const response = await fetch(`${API_BASE_URL}/api/ai/insights/cached`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

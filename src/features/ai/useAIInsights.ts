@@ -20,6 +20,7 @@ export function useAIInsights() {
       pdbId: string,
       chainId?: string,
       sequence?: string,
+      forceRefresh: boolean = false
     ) => {
       setLoading(true);
       setError("");
@@ -29,6 +30,7 @@ export function useAIInsights() {
           pdbId,
           chainId,
           sequence,
+          forceRefresh
         });
 
         setResult(data);

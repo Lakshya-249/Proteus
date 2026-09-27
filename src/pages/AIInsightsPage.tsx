@@ -120,9 +120,10 @@ export default function AIInsightsPage() {
 
     if (!chain) return;
 
-    if (chain.polymerType && !chain.polymerType.includes("polypeptide")) {
-      return; // skip AI analysis for DNA/RNA chains
-    }
+    // if (chain.polymerType && !chain.polymerType.includes("polypeptide")) {
+    //   console.log("skipping")
+    //   return; // skip AI analysis for DNA/RNA chains
+    // }
 
     runInsights(pdbId, chain.id, chain.sequence);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -574,7 +575,7 @@ export default function AIInsightsPage() {
                   if (!protein || !pdbId) return;
                   const chainId = selectedChain === "all" ? protein.chains[0]?.id : selectedChain;
                   const chain = protein.chains.find((c) => c.id === chainId);
-                  if (chain) runInsights(pdbId, chain.id, chain.sequence);
+                  if (chain) runInsights(pdbId, chain.id, chain.sequence, true);
                 }}
               disabled={aiLoading}
               className="px-3 py-1.5 rounded-full border border-cyan-400/30 bg-cyan-400/10 text-cyan-300 font-mono text-[10px] uppercase tracking-wider hover:bg-cyan-400/20 transition disabled:opacity-40"

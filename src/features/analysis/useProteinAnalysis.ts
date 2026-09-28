@@ -24,6 +24,10 @@ interface UseProteinAnalysisReturn {
   error: string;
 }
 
+const API_BASE_URL =
+  import.meta.env.VITE_API_URL ??
+  "http://localhost:8000/api"
+
 export function useProteinAnalysis(): UseProteinAnalysisReturn {
   const [result, setResult] =
     useState<AnalysisResult | null>(null);
@@ -41,7 +45,7 @@ export function useProteinAnalysis(): UseProteinAnalysisReturn {
 
     try {
       const response = await fetch(
-        "http://127.0.0.1:8000/api/analysis/dssp",
+        `${API_BASE_URL}/analysis/dssp`,
         {
           method: "POST",
           headers: {

@@ -69,12 +69,12 @@ interface AIInsightsRequest {
 
 const API_BASE_URL =
   import.meta.env.VITE_API_URL ??
-  "http://localhost:8000";
+  "http://localhost:8000/api";
 
 export async function getAIInsights(
   request: AIInsightsRequest,
 ): Promise<DetailedAIInsights> {
-  const response = await fetch(`${API_BASE_URL}/api/ai/insights/cached`, {
+  const response = await fetch(`${API_BASE_URL}/ai/insights/cached`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

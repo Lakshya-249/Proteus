@@ -152,7 +152,7 @@ function ProteinPage() {
             className="flex items-center gap-1.5 rounded-full border border-cyan-400/20 bg-cyan-400/5 px-3 py-1.5 font-mono text-[10px] uppercase tracking-widest text-cyan-300/80 outline-none transition hover:border-cyan-400/40 hover:bg-cyan-400/10 hover:text-cyan-200 focus-visible:ring-2 focus-visible:ring-cyan-300/40"
           >
             <span className="h-1.5 w-1.5 rounded-full bg-cyan-400" />
-            <span className="max-sm:pt-1.5">AI Insights</span>
+            <span>AI Insights</span>
           </Link>
         </div>
       </header>

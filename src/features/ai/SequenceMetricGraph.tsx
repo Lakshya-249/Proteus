@@ -6,7 +6,7 @@ export interface ResidueMetric {
   chain: string;
   hydropathy: number;
   charge: -1 | 0 | 1;
-  structure?: "H" | "E" | "C"; // Helix, Sheet, Coil
+  structure?: "H" | "E" | "C" | "T"; // Helix, Sheet, Coil
   isFunctional?: boolean;
 }
 
@@ -225,10 +225,12 @@ export default function SequenceMetricGraph({
                   rx={1}
                   fill={
                     d.structure === "H"
-                      ? "#22d3ee" // Helix
-                      : d.structure === "E"
-                        ? "#a78bfa" // Sheet
-                        : "#334155" // Coil / Loop
+                        ? "#22d3ee"
+                        : d.structure === "E"
+                          ? "#a78bfa"
+                          : d.structure === "T"
+                            ? "#fbbf24"
+                            : "#334155"
                   }
                   opacity={0.8}
                 />

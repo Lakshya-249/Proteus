@@ -1,20 +1,11 @@
-import {
-  useMemo,
-  useState,
-} from "react";
+import { useMemo, useState } from "react";
 
 import {
   generateComplexPDB,
   type ComplexChain,
 } from "./pdbApi";
 
-
-type SecondaryStructure =
-  | "H"
-  | "E"
-  | "C"
-  | "T";
-
+type SecondaryStructure = "H" | "E" | "T" | "C";
 
 interface ProteinChain {
   id: string;
@@ -22,1159 +13,836 @@ interface ProteinChain {
   structure: SecondaryStructure[];
 }
 
-
-interface StructureDesignerProps {
-  onGenerated: (pdb: string) => void;
+/** What the page needs to know about each chain after generating. */
+export interface DesignedChain {
+  id: string;
+  /** Intended secondary structure, one H / E / T / C per residue. */
+  structure: string;
+  length: number;
 }
 
+interface StructureDesignerProps {
+  onGenerated: (pdb: string, chains: DesignedChain[]) => void;
+}
 
-const AMINO_ACIDS =
-  "ACDEFGHIKLMNPQRSTVWY";
+type EditMode = "replace" | "insert";
 
+const AMINO_ACIDS = "ACDEFGHIKLMNPQRSTVWY";
 
-const STRUCTURE_INFO: Record<
+const MAX_CHAINS = 26;
+
+/*
+ * Colours match the DSSP colours in the 3D viewer, so what you paint
+ * here is what you will later compare against.
+ */
+const SS_STYLE: Record<
   SecondaryStructure,
-  {
-    label: string;
-    description: string;
-  }
+  { name: string; dot: string; cell: string; bar: string }
 > = {
   H: {
-    label: "HELIX",
-    description: "Alpha helix",
+    name: "Helix",
+    dot: "bg-cyan-400",
+    cell: "bg-cyan-400/10 text-cyan-300",
+    bar: "bg-cyan-400/70",
   },
-
   E: {
-    label: "SHEET",
-    description: "Beta strand",
+    name: "Sheet",
+    dot: "bg-violet-400",
+    cell: "bg-violet-400/10 text-violet-300",
+    bar: "bg-violet-400/70",
   },
-
-  C: {
-    label: "COIL",
-    description: "Coil",
-  },
-
   T: {
-    label: "TURN",
-    description: "Turn",
+    name: "Turn",
+    dot: "bg-amber-400",
+    cell: "bg-amber-400/10 text-amber-300",
+    bar: "bg-amber-400/70",
+  },
+  C: {
+    name: "Coil",
+    dot: "bg-slate-400",
+    cell: "bg-white/[0.04] text-slate-300",
+    bar: "bg-slate-400/50",
   },
 };
 
+const SS_ORDER: SecondaryStructure[] = ["H", "E", "T", "C"];
 
-function createStructure(
-  length: number,
-): SecondaryStructure[] {
-  return Array.from(
-    { length },
-    (_, index) => {
-      if (index < length * 0.6) {
-        return "H";
-      }
+const focusRing =
+  "outline-none focus-visible:ring-2 focus-visible:ring-white/40";
 
-      return "C";
-    },
+const buttonClass = `rounded-md border border-white/10 px-3 py-1.5 text-xs text-white/60 transition hover:bg-white/5 hover:text-white disabled:cursor-not-allowed disabled:opacity-30 ${focusRing}`;
+
+function createStructure(length: number): SecondaryStructure[] {
+  return Array.from({ length }, (_, index) =>
+    index < length * 0.6 ? "H" : "C",
   );
 }
 
-
-function createChain(
-  id: string,
-): ProteinChain {
-  const sequence =
-    id === "A"
-      ? "MKTAAAAAAKG"
-      : "MKKVVAAAAG";
+function createChain(id: string): ProteinChain {
+  const sequence = id === "A" ? "MKTAAAAAAKG" : "MKKVVAAAAG";
 
   return {
     id,
     sequence,
-    structure: createStructure(
-      sequence.length,
-    ),
+    structure: createStructure(sequence.length),
   };
 }
 
-
-function sanitizeSequence(
-  value: string,
-): string {
+/* Accepts plain sequences and pasted FASTA. */
+function sanitizeSequence(value: string): string {
   return value
+    .split(/\r?\n/)
+    .filter((line) => !line.trim().startsWith(">"))
+    .join("")
     .toUpperCase()
     .replace(/[^ACDEFGHIKLMNPQRSTVWY]/g, "");
 }
 
+function getNextChainId(chains: ProteinChain[]): string {
+  const used = new Set(chains.map((chain) => chain.id));
 
-function getNextChainId(
-  chains: ProteinChain[],
-): string {
-  const used = new Set(
-    chains.map((chain) => chain.id),
-  );
-
-  for (
-    let code = 65;
-    code <= 90;
-    code++
-  ) {
-    const id =
-      String.fromCharCode(code);
-
-    if (!used.has(id)) {
-      return id;
-    }
+  for (let code = 65; code <= 90; code++) {
+    const id = String.fromCharCode(code);
+    if (!used.has(id)) return id;
   }
 
   return "Z";
 }
 
-
 export default function StructureDesigner({
   onGenerated,
 }: StructureDesignerProps) {
-  const [chains, setChains] =
-    useState<ProteinChain[]>([
-      createChain("A"),
-      createChain("B"),
-    ]);
+  const [chains, setChains] = useState<ProteinChain[]>([
+    createChain("A"),
+    createChain("B"),
+  ]);
 
-  const [activeChainId, setActiveChainId] =
-    useState("A");
+  const [activeChainId, setActiveChainId] = useState("A");
 
-  const [selectedResidues, setSelectedResidues] =
-    useState<number[]>([]);
+  /* Inclusive residue range (0-based) or null. */
+  const [range, setRange] = useState<[number, number] | null>(null);
+  const [anchor, setAnchor] = useState<number | null>(null);
+  const [dragging, setDragging] = useState(false);
 
-  const [dragStart, setDragStart] =
-    useState<number | null>(null);
+  const [editMode, setEditMode] = useState<EditMode | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
 
-  const [dragging, setDragging] =
-    useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [generatedSignature, setGeneratedSignature] = useState<
+    string | null
+  >(null);
 
-  const [generating, setGenerating] =
-    useState(false);
-
-  const [error, setError] =
-    useState("");
+  const [error, setError] = useState("");
 
   const activeChain =
-    chains.find(
-      (chain) =>
-        chain.id === activeChainId,
-    ) ?? chains[0];
-
-
-  const selectedSet = useMemo(
-    () =>
-      new Set(selectedResidues),
-    [selectedResidues],
-  );
-
+    chains.find((chain) => chain.id === activeChainId) ?? chains[0];
 
   const totalResidues = useMemo(
-    () =>
-      chains.reduce(
-        (total, chain) =>
-          total + chain.sequence.length,
-        0,
-      ),
+    () => chains.reduce((total, chain) => total + chain.sequence.length, 0),
     [chains],
   );
 
+  const structureCounts = useMemo(() => {
+    const counts: Record<SecondaryStructure, number> = {
+      H: 0,
+      E: 0,
+      T: 0,
+      C: 0,
+    };
 
-  const structureCounts =
-    useMemo(() => {
-      const counts = {
-        H: 0,
-        E: 0,
-        C: 0,
-        T: 0,
-      };
+    for (const chain of chains) {
+      for (const state of chain.structure) counts[state]++;
+    }
 
-      for (const chain of chains) {
-        for (const state of chain.structure) {
-          counts[state]++;
-        }
-      }
+    return counts;
+  }, [chains]);
 
-      return counts;
-    }, [chains]);
+  const signature = JSON.stringify(chains);
+  const hasGenerated = generatedSignature !== null;
+  const dirty = hasGenerated && generatedSignature !== signature;
 
+  const emptyChain = chains.find((chain) => chain.sequence.length === 0);
+
+  const selectedCount = range ? range[1] - range[0] + 1 : 0;
+
+  function clearSelection() {
+    setRange(null);
+    setAnchor(null);
+    setEditMode(null);
+  }
 
   function updateActiveChain(
-    updater: (
-      chain: ProteinChain,
-    ) => ProteinChain,
+    updater: (chain: ProteinChain) => ProteinChain,
   ) {
     setChains((current) =>
       current.map((chain) =>
-        chain.id === activeChain.id
-          ? updater(chain)
-          : chain,
+        chain.id === activeChain.id ? updater(chain) : chain,
       ),
     );
   }
 
+  /* ───────── Chains ───────── */
+
+  function selectChain(id: string) {
+    setActiveChainId(id);
+    setRenaming(null);
+    setConfirmRemove(false);
+    clearSelection();
+  }
 
   function addChain() {
-    if (chains.length >= 26) {
-      setError(
-        "Maximum of 26 chains reached.",
-      );
-
+    if (chains.length >= MAX_CHAINS) {
+      setError(`Maximum of ${MAX_CHAINS} chains reached.`);
       return;
     }
 
-    const id = getNextChainId(chains);
+    const chain = createChain(getNextChainId(chains));
 
-    const chain = createChain(id);
-
-    setChains((current) => [
-      ...current,
-      chain,
-    ]);
-
-    setActiveChainId(id);
-    setSelectedResidues([]);
+    setChains((current) => [...current, chain]);
+    selectChain(chain.id);
     setError("");
   }
 
-
-  function removeChain(id: string) {
+  function removeActiveChain() {
     if (chains.length === 1) {
-      setError(
-        "A protein must contain at least one chain.",
-      );
-
+      setError("A protein must contain at least one chain.");
       return;
     }
 
-    const remaining =
-      chains.filter(
-        (chain) => chain.id !== id,
-      );
+    if (!confirmRemove) {
+      setConfirmRemove(true);
+      return;
+    }
+
+    const remaining = chains.filter((chain) => chain.id !== activeChain.id);
 
     setChains(remaining);
-
-    if (activeChainId === id) {
-      setActiveChainId(
-        remaining[0].id,
-      );
-    }
-
-    setSelectedResidues([]);
+    selectChain(remaining[0].id);
+    setError("");
   }
 
+  function commitRename() {
+    const newId = renaming?.trim().toUpperCase() ?? "";
 
-  function renameChain(
-    oldId: string,
-  ) {
-    const newId =
-      window.prompt(
-        "New chain ID",
-        oldId,
-      )
-        ?.trim()
-        .toUpperCase();
-
-    if (!newId) {
+    if (!/^[A-Z]$/.test(newId)) {
+      setError("Chain ID must be one letter, A to Z.");
       return;
     }
 
-    if (
-      newId.length !== 1 ||
-      !/^[A-Z]$/.test(newId)
-    ) {
-      setError(
-        "Chain ID must be one letter A-Z.",
-      );
-
+    if (newId === activeChain.id) {
+      setRenaming(null);
       return;
     }
 
-    if (
-      chains.some(
-        (chain) =>
-          chain.id === newId &&
-          chain.id !== oldId,
-      )
-    ) {
-      setError(
-        `Chain ${newId} already exists.`,
-      );
-
+    if (chains.some((chain) => chain.id === newId)) {
+      setError(`Chain ${newId} already exists.`);
       return;
     }
+
+    const oldId = activeChain.id;
 
     setChains((current) =>
       current.map((chain) =>
-        chain.id === oldId
-          ? {
-              ...chain,
-              id: newId,
-            }
-          : chain,
+        chain.id === oldId ? { ...chain, id: newId } : chain,
       ),
     );
 
-    if (activeChainId === oldId) {
-      setActiveChainId(newId);
-    }
-
+    setActiveChainId(newId);
+    setRenaming(null);
     setError("");
   }
 
+  /* ───────── Sequence ───────── */
 
-  function handleSequenceChange(
-    value: string,
-  ) {
-    const sequence =
-      sanitizeSequence(value);
+  function handleSequenceChange(value: string) {
+    const sequence = sanitizeSequence(value);
 
-    updateActiveChain(
-      (chain) => {
-        const nextStructure =
-          chain.structure.slice(
-            0,
-            sequence.length,
-          );
+    updateActiveChain((chain) => {
+      const structure = chain.structure.slice(0, sequence.length);
 
-        while (
-          nextStructure.length <
-          sequence.length
-        ) {
-          nextStructure.push("C");
-        }
+      while (structure.length < sequence.length) structure.push("C");
 
-        return {
-          ...chain,
-          sequence,
-          structure: nextStructure,
-        };
-      },
-    );
+      return { ...chain, sequence, structure };
+    });
 
-    setSelectedResidues([]);
+    clearSelection();
   }
 
+  /* ───────── Selection ───────── */
 
-  function selectResidue(
-    index: number,
-    shiftKey: boolean,
-  ) {
-    if (shiftKey && selectedResidues.length) {
-      const first =
-        selectedResidues[0];
+  function handleResidueDown(index: number, shiftKey: boolean) {
+    setEditMode(null);
 
-      const start = Math.min(
-        first,
-        index,
-      );
-
-      const end = Math.max(
-        first,
-        index,
-      );
-
-      const range = Array.from(
-        {
-          length:
-            end - start + 1,
-        },
-        (_, offset) =>
-          start + offset,
-      );
-
-      setSelectedResidues(range);
-
+    if (shiftKey && anchor !== null) {
+      setRange([Math.min(anchor, index), Math.max(anchor, index)]);
       return;
     }
 
-    setSelectedResidues([index]);
-  }
-
-
-  function handleResidueMouseDown(
-    index: number,
-  ) {
-    setDragStart(index);
+    setAnchor(index);
     setDragging(true);
-    setSelectedResidues([index]);
+    setRange([index, index]);
   }
 
+  function handleResidueEnter(index: number) {
+    if (!dragging || anchor === null) return;
 
-  function handleResidueMouseEnter(
-    index: number,
-  ) {
-    if (
-      !dragging ||
-      dragStart === null
-    ) {
-      return;
-    }
-
-    const start = Math.min(
-      dragStart,
-      index,
-    );
-
-    const end = Math.max(
-      dragStart,
-      index,
-    );
-
-    setSelectedResidues(
-      Array.from(
-        {
-          length:
-            end - start + 1,
-        },
-        (_, offset) =>
-          start + offset,
-      ),
-    );
+    setRange([Math.min(anchor, index), Math.max(anchor, index)]);
   }
 
-
-  function finishDragging() {
+  function stopDragging() {
     setDragging(false);
-    setDragStart(null);
   }
 
+  function selectAll() {
+    if (!activeChain.sequence.length) return;
 
-  function assignStructure(
-    type: SecondaryStructure,
-  ) {
-    if (!selectedResidues.length) {
-      return;
-    }
-
-    updateActiveChain(
-      (chain) => {
-        const structure =
-          [...chain.structure];
-
-        for (const index of selectedResidues) {
-          structure[index] = type;
-        }
-
-        return {
-          ...chain,
-          structure,
-        };
-      },
-    );
+    setAnchor(0);
+    setRange([0, activeChain.sequence.length - 1]);
+    setEditMode(null);
   }
 
+  /* ───────── Edits ───────── */
 
-  function replaceSelectedResidues() {
-    if (!selectedResidues.length) {
-      return;
-    }
+  function assignStructure(type: SecondaryStructure) {
+    if (!range) return;
 
-    const aa =
-      window.prompt(
-        "Replace selected residues with amino acid",
-        "A",
-      )
-        ?.trim()
-        .toUpperCase();
+    const [start, end] = range;
 
-    if (!aa) {
-      return;
-    }
-
-    if (
-      aa.length !== 1 ||
-      !AMINO_ACIDS.includes(aa)
-    ) {
-      setError(
-        "Enter one valid amino acid.",
-      );
-
-      return;
-    }
-
-    updateActiveChain(
-      (chain) => {
-        const sequence =
-          chain.sequence.split("");
-
-        for (const index of selectedResidues) {
-          sequence[index] = aa;
-        }
-
-        return {
-          ...chain,
-          sequence:
-            sequence.join(""),
-        };
-      },
-    );
-
-    setError("");
+    updateActiveChain((chain) => ({
+      ...chain,
+      structure: chain.structure.map((state, index) =>
+        index >= start && index <= end ? type : state,
+      ),
+    }));
   }
 
+  function applyAminoAcid(aa: string) {
+    if (editMode === "replace" && range) {
+      const [start, end] = range;
 
-  function deleteSelectedResidues() {
-    if (!selectedResidues.length) {
-      return;
-    }
-
-    const selected =
-      new Set(selectedResidues);
-
-    updateActiveChain(
-      (chain) => {
-        const sequence: string[] = [];
-        const structure: SecondaryStructure[] =
-          [];
-
-        for (
-          let index = 0;
-          index < chain.sequence.length;
-          index++
-        ) {
-          if (selected.has(index)) {
-            continue;
-          }
-
-          sequence.push(
-            chain.sequence[index],
-          );
-
-          structure.push(
-            chain.structure[index],
-          );
-        }
-
-        return {
-          ...chain,
-          sequence:
-            sequence.join(""),
-          structure,
-        };
-      },
-    );
-
-    setSelectedResidues([]);
-  }
-
-
-  function insertResidue() {
-    const positionText =
-      window.prompt(
-        `Insert before residue (1-${activeChain.sequence.length + 1})`,
-        String(
-          activeChain.sequence.length + 1,
-        ),
-      );
-
-    if (!positionText) {
-      return;
-    }
-
-    const position =
-      Number(positionText);
-
-    if (
-      !Number.isInteger(position) ||
-      position < 1 ||
-      position >
-        activeChain.sequence.length + 1
-    ) {
-      setError(
-        "Invalid insertion position.",
-      );
-
-      return;
-    }
-
-    const aa =
-      window.prompt(
-        "Amino acid",
-        "A",
-      )
-        ?.trim()
-        .toUpperCase();
-
-    if (!aa) {
-      return;
-    }
-
-    if (
-      aa.length !== 1 ||
-      !AMINO_ACIDS.includes(aa)
-    ) {
-      setError(
-        "Enter one valid amino acid.",
-      );
-
-      return;
-    }
-
-    const index = position - 1;
-
-    updateActiveChain(
-      (chain) => ({
+      updateActiveChain((chain) => ({
         ...chain,
         sequence:
-          chain.sequence.slice(
-            0,
-            index,
-          ) +
-          aa +
-          chain.sequence.slice(index),
+          chain.sequence.slice(0, start) +
+          aa.repeat(end - start + 1) +
+          chain.sequence.slice(end + 1),
+      }));
+    }
 
+    if (editMode === "insert") {
+      const index = range ? range[0] : activeChain.sequence.length;
+
+      updateActiveChain((chain) => ({
+        ...chain,
+        sequence:
+          chain.sequence.slice(0, index) + aa + chain.sequence.slice(index),
         structure: [
-          ...chain.structure.slice(
-            0,
-            index,
-          ),
+          ...chain.structure.slice(0, index),
           "C",
           ...chain.structure.slice(index),
         ],
-      }),
-    );
+      }));
 
+      setAnchor(index);
+      setRange([index, index]);
+    }
+
+    setEditMode(null);
     setError("");
   }
 
+  function deleteSelection() {
+    if (!range) return;
+
+    const [start, end] = range;
+
+    updateActiveChain((chain) => ({
+      ...chain,
+      sequence: chain.sequence.slice(0, start) + chain.sequence.slice(end + 1),
+      structure: chain.structure.filter(
+        (_, index) => index < start || index > end,
+      ),
+    }));
+
+    clearSelection();
+  }
+
+  /* ───────── Generate ───────── */
 
   async function generateComplex() {
     setGenerating(true);
     setError("");
 
     try {
-      const payload: ComplexChain[] =
+      const payload: ComplexChain[] = chains.map((chain) => ({
+        id: chain.id,
+        sequence: chain.sequence,
+        structure: chain.structure.join(""),
+      }));
+
+      const pdb = await generateComplexPDB(payload);
+
+      setGeneratedSignature(signature);
+
+      onGenerated(
+        pdb,
         chains.map((chain) => ({
           id: chain.id,
-          sequence: chain.sequence,
-          structure:
-            chain.structure.join(""),
-        }));
-
-      const pdb =
-        await generateComplexPDB(
-          payload,
-        );
-
-      onGenerated(pdb);
+          structure: chain.structure.join(""),
+          length: chain.sequence.length,
+        })),
+      );
     } catch (err) {
       setError(
-        err instanceof Error
-          ? err.message
-          : "Failed to generate complex.",
+        err instanceof Error ? err.message : "Failed to generate complex.",
       );
     } finally {
       setGenerating(false);
     }
   }
 
+  const footerHint = emptyChain
+    ? `Chain ${emptyChain.id} has no residues yet.`
+    : dirty
+      ? "You have changes that are not in the 3D view yet."
+      : `${chains.length} ${chains.length === 1 ? "chain" : "chains"} · ${totalResidues} residues`;
 
   return (
     <div
-      className="space-y-6"
-      onMouseUp={finishDragging}
+      className="flex min-h-0 flex-1 flex-col"
+      onMouseUp={stopDragging}
     >
-      {/* HEADER */}
+      <div className="min-h-0 flex-1 space-y-4 p-4 lg:overflow-y-auto">
+        {/* Chains */}
+        <section aria-label="Chains">
+          <div className="flex flex-wrap items-center gap-2">
+            {chains.map((chain) => {
+              const active = chain.id === activeChain.id;
 
-      <div>
-        <div className="font-mono text-[10px] uppercase tracking-[0.3em] text-white/30">
-          Structure Architect
-        </div>
+              return (
+                <button
+                  key={chain.id}
+                  type="button"
+                  onClick={() => selectChain(chain.id)}
+                  aria-pressed={active}
+                  className={[
+                    "flex items-center gap-2 rounded-md border px-3 py-1.5 transition",
+                    focusRing,
+                    active
+                      ? "border-white/30 bg-white/[0.08] text-white"
+                      : "border-white/10 text-white/50 hover:bg-white/5 hover:text-white",
+                  ].join(" ")}
+                >
+                  <span className="font-mono text-sm font-semibold">
+                    {chain.id}
+                  </span>
 
-        <h1 className="mt-2 text-xl font-semibold tracking-tight sm:text-2xl">
-          Multi-chain Protein
-        </h1>
+                  <span className="font-mono text-[10px] text-white/35">
+                    {chain.sequence.length}
+                  </span>
+                </button>
+              );
+            })}
 
-        <p className="mt-2 text-sm leading-6 text-white/40">
-          Construct multiple protein chains
-          and generate them as one molecular
-          complex.
-        </p>
-      </div>
-
-
-      {/* COMPLEX SUMMARY */}
-
-      <div className="grid grid-cols-3 gap-2">
-        <div className="rounded-lg border border-white/10 bg-white/[0.03] p-2.5 sm:p-3">
-          <div className="font-mono text-[9px] uppercase tracking-widest text-white/30">
-            Chains
+            <button
+              type="button"
+              onClick={addChain}
+              aria-label="Add chain"
+              title="Add chain"
+              className={`rounded-md border border-dashed border-white/15 px-3 py-1.5 font-mono text-sm text-white/40 transition hover:border-white/30 hover:text-white ${focusRing}`}
+            >
+              +
+            </button>
           </div>
+        </section>
 
-          <div className="mt-1 text-lg font-semibold sm:text-xl">
-            {chains.length}
-          </div>
-        </div>
-
-        <div className="rounded-lg border border-white/10 bg-white/[0.03] p-2.5 sm:p-3">
-          <div className="font-mono text-[9px] uppercase tracking-widest text-white/30">
-            Residues
-          </div>
-
-          <div className="mt-1 text-lg font-semibold sm:text-xl">
-            {totalResidues}
-          </div>
-        </div>
-
-        <div className="rounded-lg border border-white/10 bg-white/[0.03] p-2.5 sm:p-3">
-          <div className="font-mono text-[9px] uppercase tracking-widest text-white/30">
-            Mode
-          </div>
-
-          <div className="mt-1 text-lg font-semibold sm:text-xl">
-            Complex
-          </div>
-        </div>
-      </div>
-
-
-      {/* CHAIN MANAGER */}
-
-      <section>
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-white/30">
-            Chains
-          </div>
-
-          <button
-            type="button"
-            onClick={addChain}
-            className="rounded-md border border-white/10 px-3 py-1.5 font-mono text-[10px] uppercase tracking-widest text-white/60 outline-none transition hover:border-white/25 hover:bg-white/5 hover:text-white focus-visible:ring-2 focus-visible:ring-white/40"
-          >
-            + Add Chain
-          </button>
-        </div>
-
-        <div className="space-y-2">
-          {chains.map((chain) => {
-            const active =
-              chain.id ===
-              activeChainId;
-
-            return (
-              <button
-                key={chain.id}
-                type="button"
-                onClick={() => {
-                  setActiveChainId(
-                    chain.id,
-                  );
-                  setSelectedResidues([]);
+        {/* Active chain */}
+        <section className="rounded-xl border border-white/10 bg-white/[0.02]">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-4 py-3">
+            {renaming === null ? (
+              <div className="text-sm font-medium">
+                Chain {activeChain.id}
+                <span className="ml-2 font-mono text-[10px] font-normal text-white/30">
+                  {activeChain.sequence.length} aa
+                </span>
+              </div>
+            ) : (
+              <form
+                className="flex items-center gap-2"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  commitRename();
                 }}
-                className={[
-                  "w-full rounded-lg border p-3 text-left outline-none transition focus-visible:ring-2 focus-visible:ring-white/40",
-                  active
-                    ? "border-white/30 bg-white/[0.08]"
-                    : "border-white/10 bg-white/[0.02] hover:bg-white/[0.05]",
-                ].join(" ")}
               >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-white/10 font-mono text-sm font-bold">
-                      {chain.id}
-                    </div>
+                <label className="sr-only" htmlFor="chain-id">
+                  New chain ID
+                </label>
 
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-medium">
-                        Chain {chain.id}
-                      </div>
+                <input
+                  id="chain-id"
+                  autoFocus
+                  value={renaming}
+                  maxLength={1}
+                  onChange={(event) => setRenaming(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") setRenaming(null);
+                  }}
+                  className={`h-8 w-10 rounded-md border border-white/20 bg-black/30 text-center font-mono text-sm uppercase ${focusRing}`}
+                />
 
-                      <div className="font-mono text-[10px] text-white/30">
-                        {chain.sequence.length} residues
-                      </div>
-                    </div>
+                <button type="submit" className={buttonClass}>
+                  Save
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setRenaming(null)}
+                  className={buttonClass}
+                >
+                  Cancel
+                </button>
+              </form>
+            )}
+
+            {renaming === null && (
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRenaming(activeChain.id);
+                    setConfirmRemove(false);
+                  }}
+                  className={buttonClass}
+                >
+                  Rename
+                </button>
+
+                <button
+                  type="button"
+                  onClick={removeActiveChain}
+                  onBlur={() => setConfirmRemove(false)}
+                  disabled={chains.length === 1}
+                  className={`rounded-md border px-3 py-1.5 text-xs transition disabled:cursor-not-allowed disabled:opacity-30 ${focusRing} ${
+                    confirmRemove
+                      ? "border-red-400/40 bg-red-400/10 text-red-300"
+                      : "border-white/10 text-white/60 hover:bg-white/5 hover:text-red-300"
+                  }`}
+                >
+                  {confirmRemove ? "Confirm remove" : "Remove"}
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-4 p-4">
+            {/* Sequence */}
+            <div>
+              <label
+                htmlFor="sequence"
+                className="mb-1.5 block text-xs text-white/45"
+              >
+                Sequence
+              </label>
+
+              <textarea
+                id="sequence"
+                value={activeChain.sequence}
+                onChange={(event) =>
+                  handleSequenceChange(event.target.value)
+                }
+                spellCheck={false}
+                rows={2}
+                placeholder="Type or paste amino acids (FASTA is fine)"
+                className={`w-full resize-y rounded-lg border border-white/10 bg-black/30 p-3 font-mono text-sm leading-6 text-white transition placeholder:text-white/20 focus:border-white/30 ${focusRing}`}
+              />
+            </div>
+
+            {/* Residue map */}
+            <div>
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <span className="text-xs text-white/45">
+                  Structure
+                </span>
+
+                <span className="text-[11px] text-white/30">
+                  Drag to select · Shift-click extends
+                </span>
+              </div>
+
+              <div className="overflow-x-auto rounded-lg border border-white/10 bg-black/20">
+                {activeChain.sequence.length === 0 ? (
+                  <div className="p-4 text-xs text-white/30">
+                    Add a sequence to start shaping its structure.
+                  </div>
+                ) : (
+                  <div
+                    className="flex min-w-max select-none px-2 py-2"
+                    onMouseLeave={stopDragging}
+                  >
+                    {activeChain.sequence.split("").map((aa, index) => {
+                      const selected =
+                        range !== null &&
+                        index >= range[0] &&
+                        index <= range[1];
+
+                      const type = activeChain.structure[index];
+
+                      return (
+                        <div
+                          key={index}
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                            handleResidueDown(index, event.shiftKey);
+                          }}
+                          onMouseEnter={() => handleResidueEnter(index)}
+                          className="w-7 shrink-0 cursor-pointer"
+                        >
+                          <div className="h-3 text-center font-mono text-[8px] leading-3 text-white/25">
+                            {(index + 1) % 10 === 0 ? index + 1 : ""}
+                          </div>
+
+                          <button
+                            type="button"
+                            aria-label={`Residue ${index + 1}, ${aa}`}
+                            aria-pressed={selected}
+                            onClick={(event) => {
+                              // Keyboard activation only; the mouse is
+                              // handled on mousedown.
+                              if (event.detail === 0) {
+                                handleResidueDown(index, event.shiftKey);
+                                stopDragging();
+                              }
+                            }}
+                            className={[
+                              "flex h-8 w-full items-center justify-center font-mono text-xs transition",
+                              focusRing,
+                              selected
+                                ? "bg-white text-black"
+                                : "text-white/75 hover:bg-white/10",
+                            ].join(" ")}
+                          >
+                            {aa}
+                          </button>
+
+                          <div
+                            aria-hidden="true"
+                            className={[
+                              "mt-0.5 flex h-6 items-center justify-center font-mono text-[10px]",
+                              selected
+                                ? "bg-white text-black"
+                                : SS_STYLE[type].cell,
+                            ].join(" ")}
+                          >
+                            {type}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Selection toolbar */}
+            <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-xs text-white/50">
+                  {range ? (
+                    <>
+                      {selectedCount === 1
+                        ? `Residue ${range[0] + 1}`
+                        : `Residues ${range[0] + 1}–${range[1] + 1}`}
+                      <span className="ml-2 text-white/30">
+                        {selectedCount} selected
+                      </span>
+                    </>
+                  ) : (
+                    "Select residues to edit them"
+                  )}
+                </div>
+
+                <div className="flex gap-1.5">
+                  <button
+                    type="button"
+                    onClick={selectAll}
+                    disabled={activeChain.sequence.length === 0}
+                    className={buttonClass}
+                  >
+                    Select all
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={clearSelection}
+                    disabled={!range}
+                    className={buttonClass}
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+
+              {/* Paint secondary structure */}
+              <div className="mt-3">
+                <div className="mb-1.5 text-[11px] text-white/35">
+                  Paint selection as
+                </div>
+
+                <div className="grid grid-cols-4 gap-1.5">
+                  {SS_ORDER.map((type) => (
+                    <button
+                      key={type}
+                      type="button"
+                      disabled={!range}
+                      onClick={() => assignStructure(type)}
+                      className={`flex items-center justify-center gap-1.5 rounded-md border border-white/10 px-2 py-2 text-xs text-white/70 transition hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-30 ${focusRing}`}
+                    >
+                      <span
+                        className={`h-2 w-2 rounded-full ${SS_STYLE[type].dot}`}
+                      />
+                      {SS_STYLE[type].name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Edit residues */}
+              <div className="mt-3 grid grid-cols-3 gap-1.5">
+                <button
+                  type="button"
+                  disabled={!range}
+                  aria-expanded={editMode === "replace"}
+                  onClick={() =>
+                    setEditMode(editMode === "replace" ? null : "replace")
+                  }
+                  className={`${buttonClass} ${editMode === "replace" ? "bg-white/10 text-white" : ""}`}
+                >
+                  Replace
+                </button>
+
+                <button
+                  type="button"
+                  aria-expanded={editMode === "insert"}
+                  onClick={() =>
+                    setEditMode(editMode === "insert" ? null : "insert")
+                  }
+                  className={`${buttonClass} ${editMode === "insert" ? "bg-white/10 text-white" : ""}`}
+                >
+                  Insert
+                </button>
+
+                <button
+                  type="button"
+                  disabled={!range}
+                  onClick={deleteSelection}
+                  className={buttonClass}
+                >
+                  Delete
+                </button>
+              </div>
+
+              {editMode && (
+                <div className="mt-3 border-t border-white/10 pt-3">
+                  <div className="mb-2 text-[11px] text-white/40">
+                    {editMode === "replace"
+                      ? `Replace ${selectedCount === 1 ? "residue" : `${selectedCount} residues`} with…`
+                      : range
+                        ? `Insert before residue ${range[0] + 1}…`
+                        : "Insert at the end of the chain…"}
                   </div>
 
-                  <div className="flex shrink-0 items-center gap-2">
-                    <span className="rounded border border-white/10 px-2 py-1 font-mono text-[9px] text-white/40">
-                      {chain.structure.filter(
-                        (x) => x === "H",
-                      ).length}
-                      H
-                    </span>
-
-                    <span className="rounded border border-white/10 px-2 py-1 font-mono text-[9px] text-white/40">
-                      {chain.structure.filter(
-                        (x) => x === "E",
-                      ).length}
-                      E
-                    </span>
+                  <div className="grid grid-cols-10 gap-1">
+                    {AMINO_ACIDS.split("").map((aa) => (
+                      <button
+                        key={aa}
+                        type="button"
+                        onClick={() => applyAminoAcid(aa)}
+                        className={`flex h-8 items-center justify-center rounded border border-white/10 font-mono text-xs text-white/70 transition hover:bg-white hover:text-black ${focusRing}`}
+                      >
+                        {aa}
+                      </button>
+                    ))}
                   </div>
                 </div>
-              </button>
-            );
-          })}
-        </div>
-      </section>
-
-
-      {/* ACTIVE CHAIN */}
-
-      <section>
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-white/30">
-              Active Chain
-            </div>
-
-            <div className="mt-1 text-lg font-semibold">
-              Chain {activeChain.id}
+              )}
             </div>
           </div>
+        </section>
 
-          <button
-            type="button"
-            onClick={() =>
-              renameChain(
-                activeChain.id,
-              )
-            }
-            className="rounded-md border border-white/10 px-3 py-2 font-mono text-[10px] uppercase tracking-widest text-white/50 outline-none hover:bg-white/5 hover:text-white focus-visible:ring-2 focus-visible:ring-white/40"
-          >
-            Rename
-          </button>
-        </div>
-
-
-        {/* SEQUENCE */}
-
-        <div>
-          <div className="mb-2 flex items-center justify-between">
-            <span className="font-mono text-[9px] uppercase tracking-widest text-white/30">
-              Sequence
-            </span>
-
-            <span className="font-mono text-[9px] text-white/20">
-              {activeChain.sequence.length} aa
-            </span>
+        {/* Composition */}
+        <section aria-label="Complex composition">
+          <div className="mb-2 text-xs text-white/45">
+            Whole complex
           </div>
 
-          <textarea
-            value={activeChain.sequence}
-            onChange={(event) =>
-              handleSequenceChange(
-                event.target.value,
-              )
-            }
-            spellCheck={false}
-            rows={4}
-            className="w-full resize-y rounded-lg border border-white/10 bg-black/30 p-3 font-mono text-sm leading-6 text-white outline-none transition placeholder:text-white/20 focus:border-white/30 focus-visible:ring-2 focus-visible:ring-white/40"
-            placeholder="Enter amino acid sequence..."
-          />
-        </div>
+          <div className="flex h-2 overflow-hidden rounded-full bg-white/5">
+            {SS_ORDER.map((type) =>
+              structureCounts[type] > 0 ? (
+                <div
+                  key={type}
+                  className={SS_STYLE[type].bar}
+                  style={{
+                    width: `${(structureCounts[type] / Math.max(totalResidues, 1)) * 100}%`,
+                  }}
+                />
+              ) : null,
+            )}
+          </div>
 
+          <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1">
+            {SS_ORDER.map((type) => (
+              <div
+                key={type}
+                className="flex items-center gap-1.5 text-[11px] text-white/45"
+              >
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${SS_STYLE[type].dot}`}
+                />
 
-        {/* TOOLBAR */}
+                {SS_STYLE[type].name}
 
-        <div className="mt-4 flex flex-wrap gap-2">
-          {(
-            [
-              "H",
-              "E",
-              "C",
-              "T",
-            ] as SecondaryStructure[]
-          ).map((type) => (
-            <button
-              key={type}
-              type="button"
-              disabled={
-                selectedResidues.length === 0
-              }
-              onClick={() =>
-                assignStructure(type)
-              }
-              className="rounded-md border border-white/10 px-3 py-2 font-mono text-[10px] uppercase tracking-widest text-white/60 outline-none transition hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-white/40 disabled:cursor-not-allowed disabled:opacity-30"
-            >
-              {type} ·{" "}
-              {STRUCTURE_INFO[type].label}
-            </button>
-          ))}
-        </div>
+                <span className="font-mono text-white/70">
+                  {structureCounts[type]}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
 
-
-        {/* STRUCTURE MAP */}
-
-        <div className="mt-4 overflow-x-auto rounded-lg border border-white/10 bg-black/20">
+        {error && (
           <div
-            className="min-w-max p-3"
-            onMouseLeave={
-              finishDragging
-            }
+            role="alert"
+            className="rounded-lg border border-red-400/20 bg-red-400/5 p-3 text-xs leading-5 text-red-300"
           >
-            <div className="mb-2 font-mono text-[9px] uppercase tracking-widest text-white/20">
-              Residue map
-            </div>
-
-            <div className="flex">
-              {activeChain.sequence
-                .split("")
-                .map((_, index) => (
-                  <div
-                    key={`number-${index}`}
-                    className="w-7 text-center font-mono text-[8px] text-white/20"
-                  >
-                    {(index + 1) % 10 === 0
-                      ? index + 1
-                      : ""}
-                  </div>
-                ))}
-            </div>
-
-
-            {/* SEQUENCE ROW */}
-
-            <div className="mt-1 flex">
-              {activeChain.sequence
-                .split("")
-                .map((aa, index) => {
-                  const selected =
-                    selectedSet.has(
-                      index,
-                    );
-
-                  return (
-                    <button
-                      key={`aa-${index}`}
-                      type="button"
-                      onClick={(event) =>
-                        selectResidue(
-                          index,
-                          event.shiftKey,
-                        )
-                      }
-                      onMouseDown={() =>
-                        handleResidueMouseDown(
-                          index,
-                        )
-                      }
-                      onMouseEnter={() =>
-                        handleResidueMouseEnter(
-                          index,
-                        )
-                      }
-                      className={[
-                        "flex h-8 w-7 shrink-0 items-center justify-center font-mono text-xs outline-none transition focus-visible:ring-2 focus-visible:ring-white/40",
-                        selected
-                          ? "bg-white text-black"
-                          : "text-white/70 hover:bg-white/10",
-                      ].join(" ")}
-                    >
-                      {aa}
-                    </button>
-                  );
-                })}
-            </div>
-
-
-            {/* STRUCTURE ROW */}
-
-            <div className="mt-1 flex border-t border-white/5 pt-1">
-              {activeChain.structure.map(
-                (type, index) => {
-                  const selected =
-                    selectedSet.has(
-                      index,
-                    );
-
-                  return (
-                    <button
-                      key={`ss-${index}`}
-                      type="button"
-                      onClick={() =>
-                        selectResidue(
-                          index,
-                          false,
-                        )
-                      }
-                      className={[
-                        "flex h-7 w-7 shrink-0 items-center justify-center font-mono text-[9px] outline-none transition focus-visible:ring-2 focus-visible:ring-white/40",
-                        selected
-                          ? "bg-white text-black"
-                          : "text-white/40 hover:bg-white/10",
-                      ].join(" ")}
-                    >
-                      {type}
-                    </button>
-                  );
-                },
-              )}
-            </div>
-
-
-            {/* STRUCTURE BAR */}
-
-            <div className="mt-2 flex h-2 overflow-hidden rounded-full">
-              {activeChain.structure.map(
-                (type, index) => (
-                  <div
-                    key={`bar-${index}`}
-                    className={[
-                      "h-full w-7 shrink-0 border-r border-black/20",
-                      type === "H"
-                        ? "bg-white/80"
-                        : type === "E"
-                          ? "bg-white/55"
-                          : type === "T"
-                            ? "bg-white/35"
-                            : "bg-white/15",
-                    ].join(" ")}
-                  />
-                ),
-              )}
-            </div>
+            {error}
           </div>
+        )}
+      </div>
+
+      {/* Generate */}
+      <footer className="sticky bottom-0 border-t border-white/10 bg-[#05070a] px-4 py-3">
+        <button
+          type="button"
+          disabled={generating || Boolean(emptyChain)}
+          onClick={generateComplex}
+          className={`w-full rounded-lg bg-white px-5 py-3 text-sm font-semibold text-black transition hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-40 ${focusRing}`}
+        >
+          {generating
+            ? "Generating…"
+            : hasGenerated && dirty
+              ? "Update 3D structure"
+              : chains.length === 1
+                ? "Generate structure"
+                : `Generate ${chains.length}-chain complex`}
+        </button>
+
+        <div
+          className={`mt-2 text-center text-[11px] ${dirty ? "text-amber-300/80" : "text-white/30"}`}
+        >
+          {footerHint}
         </div>
-
-
-        {/* EDIT OPERATIONS */}
-
-        <div className="mt-4 grid grid-cols-3 gap-2">
-          <button
-            type="button"
-            onClick={
-              replaceSelectedResidues
-            }
-            disabled={
-              selectedResidues.length === 0
-            }
-            className="rounded-md border border-white/10 px-2 py-2 font-mono text-[9px] uppercase tracking-widest text-white/50 outline-none hover:bg-white/5 focus-visible:ring-2 focus-visible:ring-white/40 disabled:opacity-30 sm:px-3"
-          >
-            Replace
-          </button>
-
-          <button
-            type="button"
-            onClick={
-              insertResidue
-            }
-            className="rounded-md border border-white/10 px-2 py-2 font-mono text-[9px] uppercase tracking-widest text-white/50 outline-none hover:bg-white/5 focus-visible:ring-2 focus-visible:ring-white/40 sm:px-3"
-          >
-            Insert
-          </button>
-
-          <button
-            type="button"
-            onClick={
-              deleteSelectedResidues
-            }
-            disabled={
-              selectedResidues.length === 0
-            }
-            className="rounded-md border border-white/10 px-2 py-2 font-mono text-[9px] uppercase tracking-widest text-white/50 outline-none hover:bg-white/5 focus-visible:ring-2 focus-visible:ring-white/40 disabled:opacity-30 sm:px-3"
-          >
-            Delete
-          </button>
-        </div>
-
-
-        {/* SELECTION INFO */}
-
-        <div className="mt-4 rounded-lg border border-white/10 bg-white/[0.02] p-3">
-          <div className="flex items-center justify-between">
-            <span className="font-mono text-[9px] uppercase tracking-widest text-white/25">
-              Selection
-            </span>
-
-            <span className="font-mono text-xs text-white/60">
-              {selectedResidues.length}
-            </span>
-          </div>
-
-          {selectedResidues.length > 0 && (
-            <div className="mt-2 font-mono text-[10px] text-white/30">
-              Residues{" "}
-              {selectedResidues
-                .map(
-                  (index) =>
-                    index + 1,
-                )
-                .join(", ")}
-            </div>
-          )}
-        </div>
-      </section>
-
-
-      {/* GLOBAL STRUCTURE SUMMARY */}
-
-      <section>
-        <div className="mb-3 font-mono text-[10px] uppercase tracking-[0.2em] text-white/30">
-          Complex composition
-        </div>
-
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {(
-            [
-              ["H", "Helix"],
-              ["E", "Sheet"],
-              ["C", "Coil"],
-              ["T", "Turn"],
-            ] as const
-          ).map(([type, label]) => (
-            <div
-              key={type}
-              className="rounded-lg border border-white/10 bg-white/[0.02] p-2"
-            >
-              <div className="font-mono text-[9px] text-white/25">
-                {label}
-              </div>
-
-              <div className="mt-1 font-mono text-sm text-white/70">
-                {structureCounts[type]}
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-
-      {/* DELETE CHAIN */}
-
-      <button
-        type="button"
-        onClick={() =>
-          removeChain(
-            activeChain.id,
-          )
-        }
-        disabled={chains.length === 1}
-        className="w-full rounded-lg border border-red-500/20 px-4 py-3 font-mono text-[10px] uppercase tracking-widest text-red-300/60 outline-none transition hover:bg-red-500/5 hover:text-red-300 focus-visible:ring-2 focus-visible:ring-red-400/40 disabled:cursor-not-allowed disabled:opacity-20"
-      >
-        Remove Chain {activeChain.id}
-      </button>
-
-
-      {/* ERROR */}
-
-      {error && (
-        <div className="rounded-lg border border-red-400/20 bg-red-400/5 p-3 font-mono text-[10px] leading-5 text-red-300">
-          {error}
-        </div>
-      )}
-
-
-      {/* GENERATE */}
-
-      <button
-        type="button"
-        disabled={
-          generating ||
-          chains.some(
-            (chain) =>
-              chain.sequence.length === 0,
-          )
-        }
-        onClick={
-          generateComplex
-        }
-        className="sticky bottom-4 w-full rounded-xl border border-white/20 bg-white px-5 py-4 font-mono text-xs font-semibold uppercase tracking-[0.2em] text-black shadow-2xl outline-none transition hover:bg-white/90 focus-visible:ring-2 focus-visible:ring-white/60 disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        {generating
-          ? "Generating Complex..."
-          : `Generate ${chains.length}-Chain Complex`}
-      </button>
+      </footer>
     </div>
   );
 }

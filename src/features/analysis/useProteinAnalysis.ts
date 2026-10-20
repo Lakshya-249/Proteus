@@ -9,7 +9,10 @@ export interface DSSPResidue {
 
 export interface AnalysisResult {
   method: string;
-  pdb_id: string;
+  /** Set by the PDB-ID endpoint. */
+  pdb_id?: string;
+  /** Set by the file-upload endpoint. */
+  filename?: string;
   chain_id: string;
   residues: DSSPResidue[];
 }

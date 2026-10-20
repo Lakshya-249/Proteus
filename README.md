@@ -23,6 +23,9 @@ The application currently supports:
 * User-defined protein sequence input
 * User-defined secondary-structure patterns
 * Generated PDB visualization
+* Upload your own `.pdb` file to view it in 3D
+* DSSP analysis for generated and uploaded structures, per chain or all chains
+* Design check: compares DSSP output with the secondary structure you painted
 * Synchronization between residue tables and the 3D structure
 
 ---
@@ -321,6 +324,36 @@ The frontend converts these results into:
 * accessibility values
 * residue tables
 * 3D visualization styles
+
+## DSSP for uploaded and generated structures
+
+Structures that only exist as a file (a `.pdb` the user uploads, or a complex
+generated in the Structure Designer) are analysed with:
+
+```http
+POST /api/analysis/dssp/file
+Content-Type: multipart/form-data
+```
+
+| Field      | Type | Description                          |
+| ---------- | ---- | ------------------------------------ |
+| `file`     | file | A `.pdb` file                        |
+| `chain_id` | text | The chain to analyse                 |
+
+The response has the same shape as the PDB-ID endpoint, with `filename` in
+place of `pdb_id`.
+
+The server analyses one chain per request. The frontend sends one request per
+chain, so "Analyze all chains" simply issues them one after another and
+colours every analysed chain in the 3D viewer.
+
+The client implementation lives in:
+
+```text
+features/analysis/analysisApi.ts      runDsspOnFile()
+features/analysis/useStructureDSSP.ts per-chain results and loading state
+features/structure/PdbUpload.tsx      file picker, drag and drop, validation
+```
 
 ---
 

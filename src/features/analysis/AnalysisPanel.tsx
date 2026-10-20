@@ -5,9 +5,35 @@ import type {
 } from "./useProteinAnalysis";
 
 interface AnalysisPanelProps {
-  pdbId: string;
+  /** RCSB entry ID. Used as the title when no label is given. */
+  pdbId?: string;
+
+  /** Title shown in the header, e.g. "Designed complex" or a file name. */
+  label?: string;
+
   sequence?: string;
+
+  /** Residue count, for structures that have no single sequence string. */
+  residueCount?: number;
+
   chainId?: string;
+
+  /** Chains that can be analysed. Shows a chain selector when given. */
+  chains?: string[];
+
+  /** Chains that already have results (marked in the selector). */
+  analyzedChains?: string[];
+
+  onChainChange?: (chain: string) => void;
+
+  /** Adds an "Analyze all chains" button. */
+  onRunAll?: () => void;
+
+  /**
+   * Intended secondary structure of the active chain (H / E / C / T per
+   * residue). When given, DSSP is compared against it.
+   */
+  designedStructure?: string;
 
   result: AnalysisResult | null;
   loading: boolean;
@@ -21,10 +47,20 @@ interface AnalysisPanelProps {
   ) => void;
 }
 
+const HELIX_CODES = new Set(["H", "G", "I"]);
+const SHEET_CODES = new Set(["E", "B"]);
+
 function AnalysisPanel({
   pdbId,
+  label,
   sequence,
+  residueCount,
   chainId,
+  chains,
+  analyzedChains,
+  onChainChange,
+  onRunAll,
+  designedStructure,
   result,
   loading,
   error,
@@ -39,15 +75,11 @@ function AnalysisPanel({
     const total = residues.length;
 
     const helix = residues.filter((r) =>
-      ["H", "G", "I"].includes(
-        r.secondary_structure,
-      ),
+      HELIX_CODES.has(r.secondary_structure),
     ).length;
 
     const sheet = residues.filter((r) =>
-      ["E", "B"].includes(
-        r.secondary_structure,
-      ),
+      SHEET_CODES.has(r.secondary_structure),
     ).length;
 
     const coil = total - helix - sheet;
@@ -79,7 +111,15 @@ function AnalysisPanel({
     };
   }, [result]);
 
-  if (!sequence) {
+  const agreement = useMemo(
+    () => compareWithDesign(result, designedStructure),
+    [result, designedStructure],
+  );
+
+  const title = label ?? pdbId?.toUpperCase() ?? "Structure";
+  const total = residueCount ?? sequence?.length ?? 0;
+
+  if (!sequence && !residueCount) {
     return (
       <div className="flex h-full items-center justify-center p-6 text-center text-white/40">
         No sequence available for analysis.
@@ -100,9 +140,10 @@ function AnalysisPanel({
         </h2>
 
         <p className="mt-2 max-w-2xl text-sm leading-6 text-white/45">
-          Analyze the experimentally determined protein
-          structure to identify secondary structure and
-          residue-level solvent accessibility.
+          Identify secondary structure and
+          residue-level solvent accessibility
+          from the atomic coordinates of a
+          protein structure.
         </p>
       </div>
 
@@ -114,9 +155,9 @@ function AnalysisPanel({
               Secondary Structure & Accessibility
             </div>
 
-            <div className="mt-1 font-mono text-[10px] text-white/30">
-              {pdbId.toUpperCase()} · CHAIN{" "}
-              {chainId ?? "—"} · {sequence.length} RESIDUES
+            <div className="mt-1 truncate font-mono text-[10px] text-white/30">
+              {title} · CHAIN{" "}
+              {chainId ?? "—"} · {total} RESIDUES
             </div>
           </div>
 
@@ -125,21 +166,77 @@ function AnalysisPanel({
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={onRunAnalysis}
-          disabled={loading}
-          className="w-full rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-5 py-2.5 text-xs font-medium text-cyan-300 outline-none transition hover:bg-cyan-400/15 focus-visible:ring-2 focus-visible:ring-cyan-300/40 disabled:cursor-not-allowed disabled:opacity-40 sm:w-auto"
-        >
-          {loading
-            ? "Analyzing..."
-            : result
-              ? "Run Again"
-              : "Run Analysis"}
-        </button>
+        {chains && chains.length > 1 && (
+          <div className="mb-5">
+            <div className="mb-2 font-mono text-[9px] uppercase tracking-widest text-white/30">
+              Chain
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {chains.map((chain) => {
+                const active = chain === chainId;
+                const done = analyzedChains?.includes(chain);
+
+                return (
+                  <button
+                    key={chain}
+                    type="button"
+                    onClick={() => onChainChange?.(chain)}
+                    aria-pressed={active}
+                    className={[
+                      "flex items-center gap-2 rounded-md border px-3 py-1.5 font-mono text-xs outline-none transition focus-visible:ring-2 focus-visible:ring-cyan-300/40",
+                      active
+                        ? "border-cyan-400/40 bg-cyan-400/10 text-cyan-200"
+                        : "border-white/10 text-white/50 hover:bg-white/5 hover:text-white",
+                    ].join(" ")}
+                  >
+                    {chain}
+
+                    {done && (
+                      <span
+                        className="h-1.5 w-1.5 rounded-full bg-emerald-400"
+                        title="Analysed"
+                      />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <button
+            type="button"
+            onClick={onRunAnalysis}
+            disabled={loading}
+            className="w-full rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-5 py-2.5 text-xs font-medium text-cyan-300 outline-none transition hover:bg-cyan-400/15 focus-visible:ring-2 focus-visible:ring-cyan-300/40 disabled:cursor-not-allowed disabled:opacity-40 sm:w-auto"
+          >
+            {loading
+              ? "Analyzing..."
+              : result
+                ? chains && chains.length > 1
+                  ? `Run chain ${chainId} again`
+                  : "Run again"
+                : chains && chains.length > 1
+                  ? `Analyze chain ${chainId}`
+                  : "Run analysis"}
+          </button>
+
+          {onRunAll && chains && chains.length > 1 && (
+            <button
+              type="button"
+              onClick={onRunAll}
+              disabled={loading}
+              className="w-full rounded-lg border border-white/10 px-5 py-2.5 text-xs font-medium text-white/60 outline-none transition hover:bg-white/5 hover:text-white focus-visible:ring-2 focus-visible:ring-white/40 disabled:cursor-not-allowed disabled:opacity-40 sm:w-auto"
+            >
+              Analyze all {chains.length} chains
+            </button>
+          )}
+        </div>
 
         {error && (
-          <div className="mt-4 rounded-lg border border-red-400/10 bg-red-400/5 p-3 text-xs text-red-400">
+          <div className="mt-4 whitespace-pre-line rounded-lg border border-red-400/10 bg-red-400/5 p-3 text-xs leading-5 text-red-400">
             {error}
           </div>
         )}
@@ -171,6 +268,49 @@ function AnalysisPanel({
             </div>
           </div>
 
+          {/* Design check */}
+          {agreement && (
+            <section className="mb-6 rounded-2xl border border-cyan-400/15 bg-cyan-400/[0.03] p-4 sm:p-6">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium text-white">
+                    Design check
+                  </div>
+
+                  <div className="mt-1 max-w-md text-xs leading-5 text-white/40">
+                    How closely DSSP&apos;s result
+                    matches the helix, sheet and
+                    coil you painted for this chain.
+                  </div>
+                </div>
+
+                <div className="text-3xl font-light text-cyan-200">
+                  {agreement.overallPct}%
+                </div>
+              </div>
+
+              <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                <RecoveryStat
+                  label="Helix as designed"
+                  hit={agreement.helix.hit}
+                  of={agreement.helix.of}
+                />
+
+                <RecoveryStat
+                  label="Sheet as designed"
+                  hit={agreement.sheet.hit}
+                  of={agreement.sheet.of}
+                />
+
+                <RecoveryStat
+                  label="Coil as designed"
+                  hit={agreement.coil.hit}
+                  of={agreement.coil.of}
+                />
+              </div>
+            </section>
+          )}
+
           {/* Secondary structure */}
           <section className="mb-6 rounded-2xl border border-white/10 bg-white/[0.02] p-4 sm:p-6">
             <div className="mb-5">
@@ -183,28 +323,7 @@ function AnalysisPanel({
               </div>
             </div>
 
-            <div className="mb-5 flex h-3 overflow-hidden rounded-full bg-white/5">
-              <div
-                className="bg-cyan-400/70"
-                style={{
-                  width: `${statistics.helixPct}%`,
-                }}
-              />
-
-              <div
-                className="bg-violet-400/70"
-                style={{
-                  width: `${statistics.sheetPct}%`,
-                }}
-              />
-
-              <div
-                className="bg-white/20"
-                style={{
-                  width: `${statistics.coilPct}%`,
-                }}
-              />
-            </div>
+            <ResidueStrip residues={result.residues} />
 
             <div className="grid gap-3 sm:grid-cols-3">
               <StructureStat
@@ -318,6 +437,131 @@ function AnalysisPanel({
           <Tag>Residue-level</Tag>
         </div>
       </div>
+    </div>
+  );
+}
+
+interface Recovery {
+  hit: number;
+  of: number;
+}
+
+interface DesignAgreement {
+  overallPct: number;
+  helix: Recovery;
+  sheet: Recovery;
+  coil: Recovery;
+}
+
+/*
+ * Compares DSSP output with the designed H/E/C/T string at the
+ * three-state level (helix / sheet / everything else). Only meaningful when
+ * both describe the same residues, so a length mismatch returns null.
+ */
+function compareWithDesign(
+  result: AnalysisResult | null,
+  designed: string | undefined,
+): DesignAgreement | null {
+  if (
+    !result ||
+    !designed ||
+    designed.length !== result.residues.length
+  ) {
+    return null;
+  }
+
+  const helix = { hit: 0, of: 0 };
+  const sheet = { hit: 0, of: 0 };
+  const coil = { hit: 0, of: 0 };
+
+  result.residues.forEach((residue, index) => {
+    const observed = HELIX_CODES.has(residue.secondary_structure)
+      ? "H"
+      : SHEET_CODES.has(residue.secondary_structure)
+        ? "E"
+        : "C";
+
+    const intended =
+      designed[index] === "H" || designed[index] === "E"
+        ? designed[index]
+        : "C";
+
+    const bucket =
+      intended === "H" ? helix : intended === "E" ? sheet : coil;
+
+    bucket.of++;
+    if (observed === intended) bucket.hit++;
+  });
+
+  const hits = helix.hit + sheet.hit + coil.hit;
+
+  return {
+    overallPct: percentage(hits, result.residues.length),
+    helix,
+    sheet,
+    coil,
+  };
+}
+
+function RecoveryStat({
+  label,
+  hit,
+  of,
+}: {
+  label: string;
+  hit: number;
+  of: number;
+}) {
+  return (
+    <div className="rounded-lg border border-white/5 bg-black/10 p-4">
+      <div className="text-xs text-white/50">{label}</div>
+
+      <div className="mt-3 flex items-end justify-between">
+        <span className="text-lg text-white/70">
+          {of === 0 ? "—" : `${hit} / ${of}`}
+        </span>
+
+        {of > 0 && (
+          <span className="font-mono text-[10px] text-white/30">
+            {percentage(hit, of)}%
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/*
+ * One coloured tick per residue, in sequence order.
+ */
+function ResidueStrip({
+  residues,
+}: {
+  residues: DSSPResidue[];
+}) {
+  return (
+    <div
+      className="mb-5 flex h-6 overflow-hidden rounded-md bg-white/5"
+      role="img"
+      aria-label="Secondary structure of each residue, in sequence order"
+    >
+      {residues.map((residue, index) => {
+        const code = residue.secondary_structure;
+
+        const color = HELIX_CODES.has(code)
+          ? "bg-cyan-400/70"
+          : SHEET_CODES.has(code)
+            ? "bg-violet-400/70"
+            : "bg-white/15";
+
+        return (
+          <div
+            key={index}
+            title={`${residue.resn} ${residue.resi}`}
+            className={`h-full min-w-px flex-1 ${color}`}
+          />
+        );
+      })}
     </div>
   );
 }

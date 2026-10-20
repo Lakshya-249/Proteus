@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import $3Dmol, { GLViewer } from "3dmol";
 
@@ -59,6 +59,12 @@ interface ProteinViewerProps {
   ) => void;
 
   dsspResult?: AnalysisResult | null;
+
+  /*
+   * DSSP results for several chains at once. When
+   * provided it is used instead of dsspResult.
+   */
+  dsspResults?: AnalysisResult[];
 }
 
 function ProteinViewer({
@@ -69,7 +75,13 @@ function ProteinViewer({
   forcedChain,
   onResidueMap,
   dsspResult,
+  dsspResults,
 }: ProteinViewerProps) {
+  const dssp = useMemo(
+    () => dsspResults ?? (dsspResult ? [dsspResult] : []),
+    [dsspResults, dsspResult],
+  );
+
   const viewerRef = useRef<HTMLDivElement>(null);
   const viewerInstance = useRef(null);
   const modelLoaded = useRef(false);
@@ -274,9 +286,9 @@ function ProteinViewer({
      * representation so they override the
      * cartoon colors.
      */
-    applyDSSPStyles(
+    applyAllDSSP(
       viewer,
-      dsspResult,
+      dssp,
       effectiveChain,
     );
 
@@ -298,7 +310,7 @@ function ProteinViewer({
 
     viewer.render();
   }, [
-    dsspResult,
+    dssp,
     representation,
     effectiveChain,
     selectedResidue,
@@ -327,9 +339,9 @@ function ProteinViewer({
         effectiveChain,
       );
 
-      applyDSSPStyles(
+      applyAllDSSP(
         viewer,
-        dsspResult,
+        dssp,
         effectiveChain,
       );
 
@@ -365,9 +377,9 @@ function ProteinViewer({
         effectiveChain,
       );
 
-      applyDSSPStyles(
+      applyAllDSSP(
         viewer,
-        dsspResult,
+        dssp,
         effectiveChain,
       );
 
@@ -397,9 +409,9 @@ function ProteinViewer({
       chain,
     );
 
-    applyDSSPStyles(
+    applyAllDSSP(
       viewer,
-      dsspResult,
+      dssp,
       chain,
     );
 
@@ -437,7 +449,7 @@ function ProteinViewer({
       className="relative h-full min-h-[70vh] w-full"
     >
       {/* DSSP legend */}
-      {dsspResult && (
+      {dssp.length > 0 && (
         <div className="absolute right-4 top-4 z-20 border border-white/10 bg-black/60 p-2.5 backdrop-blur sm:right-6 sm:top-6 sm:p-3">
           <div className="mb-2 font-mono text-[9px] uppercase tracking-[0.15em] text-white/30">
             DSSP
@@ -545,6 +557,16 @@ function ProteinViewer({
       </div>
     </div>
   );
+}
+
+function applyAllDSSP(
+  viewer: GLViewer,
+  results: AnalysisResult[],
+  selectedChain: string,
+) {
+  for (const result of results) {
+    applyDSSPStyles(viewer, result, selectedChain);
+  }
 }
 
 /*

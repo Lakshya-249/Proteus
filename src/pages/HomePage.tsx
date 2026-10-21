@@ -16,9 +16,15 @@ function HomePage() {
   async function handleSearch(event: FormEvent) {
     event.preventDefault();
 
-    const value = query.trim();
-
+        const value = query.trim();
     if (!value || loading) return;
+
+    // A bare PDB ID (e.g. 1A3N) goes straight to the structure.
+    if (/^[0-9][A-Za-z0-9]{3}$/.test(value)) {
+      navigate(`/protein/${value.toUpperCase()}`);
+      return;
+    }
+
 
     setLoading(true);
     setError("");
@@ -193,9 +199,29 @@ function HomePage() {
                   }
                   className="flex w-full items-center justify-between gap-4 px-4 py-4 text-left outline-none transition hover:bg-white/5 focus-visible:bg-white/5 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white/40"
                 >
-                  <span className="truncate font-mono text-sm">
-                    {result.pdbId}
+                                    <span className="min-w-0">
+                    <span className="block font-mono text-sm">
+                      {result.pdbId}
+                    </span>
+                    {result.title && (
+                      <span className="mt-1 block truncate text-xs text-white/50">
+                        {result.title}
+                      </span>
+                    )}
+                    {(result.method || result.resolution) && (
+                      <span className="mt-0.5 block font-mono text-[10px] text-white/30">
+                        {[
+                          result.method,
+                          result.resolution
+                            ? `${result.resolution.toFixed(2)} Å`
+                            : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </span>
+                    )}
                   </span>
+
 
                   <span className="shrink-0 font-mono text-[10px] text-white/30">
                     OPEN →

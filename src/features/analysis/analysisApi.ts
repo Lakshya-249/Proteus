@@ -1,7 +1,7 @@
 import type { AnalysisResult } from "./useProteinAnalysis";
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_URL ?? "http://localhost:8000/api";
+import { API_BASE_URL } from "../../config";
+import { readError } from "../../lib/http";
 
 /**
  * Runs DSSP on a user-supplied .pdb file for one chain.
@@ -22,7 +22,7 @@ export async function runDsspOnFile(
   });
 
   if (!response.ok) {
-    throw new Error(await readError(response));
+    throw new Error(await readError(response, `DSSP failed (${response.status}).`));
   }
 
   const data = (await response.json()) as AnalysisResult;
@@ -32,23 +32,4 @@ export async function runDsspOnFile(
   }
 
   return data;
-}
-
-async function readError(response: Response): Promise<string> {
-  const fallback = `DSSP failed (${response.status}).`;
-
-  try {
-    const data = await response.json();
-
-    if (typeof data.detail === "string") return data.detail;
-
-    // FastAPI validation errors arrive as a list.
-    if (Array.isArray(data.detail) && data.detail[0]?.msg) {
-      return data.detail[0].msg;
-    }
-  } catch {
-    // Not JSON: keep the fallback.
-  }
-
-  return fallback;
 }

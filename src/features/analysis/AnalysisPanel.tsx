@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import RamachandranPlot from "./RamachandranPlot";
 import type {
   AnalysisResult,
   DSSPResidue,
@@ -84,8 +85,10 @@ function AnalysisPanel({
 
     const coil = total - helix - sheet;
 
+    // "Exposed" means >= 25% of the residue's maximum surface area. The raw
+    // DSSP value is absolute (A^2), so comparing it to 25 mislabelled most residues.
     const accessible = residues.filter(
-      (r) => r.accessibility >= 25,
+      (r) => (r.rel_accessibility ?? (r.accessibility / 190) * 100) >= 25,
     ).length;
 
     const buried = total - accessible;
@@ -396,6 +399,13 @@ function AnalysisPanel({
             </div>
           </section>
 
+          {/* Ramachandran */}
+          <RamachandranPlot
+            residues={result.residues}
+            chainId={chainId}
+            onResidueSelect={onResidueSelect}
+          />
+
           {/* Residue table */}
           <ResidueTable
             residues={result.residues}
@@ -609,6 +619,10 @@ function ResidueTable({
               <th className="px-4 py-3 sm:px-5">
                 ASA
               </th>
+
+              <th className="px-4 py-3 sm:px-5">
+                Rel. %
+              </th>
             </tr>
           </thead>
 
@@ -644,6 +658,12 @@ function ResidueTable({
 
                 <td className="px-4 py-3 font-mono text-white/50 sm:px-5">
                   {residue.accessibility}
+                </td>
+
+                <td className="px-4 py-3 font-mono text-white/50 sm:px-5">
+                  {residue.rel_accessibility != null
+                    ? `${residue.rel_accessibility.toFixed(0)}%`
+                    : "—"}
                 </td>
               </tr>
             ))}

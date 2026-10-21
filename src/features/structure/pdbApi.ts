@@ -1,6 +1,5 @@
-const API_BASE_URL =
-  import.meta.env.VITE_API_URL ??
-  "http://localhost:8000/api";
+import { API_BASE_URL } from "../../config";
+import { postJson } from "../../lib/http";
 
 export async function generatePDB(
   sequence: string,
@@ -97,5 +96,35 @@ export async function generateComplexPDB(
     );
   }
 
+  return data.pdb;
+}
+
+
+export interface GeneratedStructure {
+  pdb: string;
+  /** Non-fatal issues, e.g. steric clashes in the idealised backbone. */
+  warnings: string[];
+}
+
+export async function generateComplexStructure(
+  chains: ComplexChain[],
+): Promise<GeneratedStructure> {
+  const data = await postJson<{ pdb?: string; warnings?: string[] }>(
+    "/structure/generate-complex",
+    { chains },
+    { fallbackError: "Failed to generate protein complex." },
+  );
+  if (!data.pdb) throw new Error("API returned an empty PDB.");
+  return { pdb: data.pdb, warnings: data.warnings ?? [] };
+}
+
+/** Real fold prediction (ESMFold). B-factor column holds pLDDT confidence. */
+export async function predictStructure(sequence: string): Promise<string> {
+  const data = await postJson<{ pdb?: string }>(
+    "/structure/predict",
+    { sequence },
+    { fallbackError: "Structure prediction failed." },
+  );
+  if (!data.pdb) throw new Error("Prediction service returned no structure.");
   return data.pdb;
 }

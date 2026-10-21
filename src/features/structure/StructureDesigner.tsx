@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 
 import {
-  generateComplexPDB,
+  generateComplexStructure,
+  predictStructure,
   type ComplexChain,
 } from "./pdbApi";
 
@@ -133,7 +134,10 @@ export default function StructureDesigner({
     string | null
   >(null);
 
-  const [error, setError] = useState("");
+    const [error, setError] = useState("");
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [predicting, setPredicting] = useState(false);
+
 
   const activeChain =
     chains.find((chain) => chain.id === activeChainId) ?? chains[0];
@@ -370,9 +374,11 @@ export default function StructureDesigner({
 
   /* ───────── Generate ───────── */
 
-  async function generateComplex() {
+    async function generateComplex() {
     setGenerating(true);
     setError("");
+    setWarnings([]);
+
 
     try {
       const payload: ComplexChain[] = chains.map((chain) => ({
@@ -381,9 +387,12 @@ export default function StructureDesigner({
         structure: chain.structure.join(""),
       }));
 
-      const pdb = await generateComplexPDB(payload);
+            const { pdb, warnings: serverWarnings } =
+        await generateComplexStructure(payload);
 
+      setWarnings(serverWarnings);
       setGeneratedSignature(signature);
+
 
       onGenerated(
         pdb,
@@ -399,6 +408,52 @@ export default function StructureDesigner({
       );
     } finally {
       setGenerating(false);
+    }
+  }
+
+    /*
+   * Real fold prediction for the active chain (ESMFold). The generator above
+   * only builds an idealised backbone sketch; this gives a physically
+   * plausible fold, and DSSP can then show whether it matches the painted
+   * secondary structure.
+   */
+  const canPredict =
+    activeChain.sequence.length >= 16 && activeChain.sequence.length <= 400;
+
+  async function predictActiveChain() {
+    setPredicting(true);
+    setError("");
+    setWarnings([]);
+
+    try {
+      const predicted = await predictStructure(activeChain.sequence);
+
+      // ESMFold always labels its chain "A"; relabel to match this chain.
+      const pdb = predicted
+        .split("\n")
+        .map((line) =>
+          /^(ATOM  |HETATM|TER   )/.test(line) && line.length > 21
+            ? line.slice(0, 21) + activeChain.id + line.slice(22)
+            : line,
+        )
+        .join("\n");
+
+      onGenerated(pdb, [
+        {
+          id: activeChain.id,
+          structure: activeChain.structure.join(""),
+          length: activeChain.sequence.length,
+        },
+      ]);
+      setWarnings([
+        `Showing the ESMFold prediction for chain ${activeChain.id} only. Use the B-factor color mode to see per-residue confidence (pLDDT).`,
+      ]);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Structure prediction failed.",
+      );
+    } finally {
+      setPredicting(false);
     }
   }
 
@@ -810,6 +865,17 @@ export default function StructureDesigner({
           </div>
         </section>
 
+                {warnings.length > 0 && (
+          <div
+            role="status"
+            className="rounded-lg border border-amber-300/20 bg-amber-300/5 p-3 text-xs leading-5 text-amber-200/80"
+          >
+            {warnings.map((warning) => (
+              <p key={warning}>{warning}</p>
+            ))}
+          </div>
+        )}
+
         {error && (
           <div
             role="alert"
@@ -835,6 +901,18 @@ export default function StructureDesigner({
               : chains.length === 1
                 ? "Generate structure"
                 : `Generate ${chains.length}-chain complex`}
+        </button>
+
+                <button
+          type="button"
+          disabled={predicting || generating || !canPredict}
+          onClick={predictActiveChain}
+          title="Predict a real 3D fold for the active chain with ESMFold (16-400 residues)"
+          className={`mt-2 w-full rounded-lg border border-white/15 px-5 py-2.5 text-xs font-medium text-white/70 transition hover:bg-white/5 hover:text-white disabled:cursor-not-allowed disabled:opacity-40 ${focusRing}`}
+        >
+          {predicting
+            ? "Predicting fold…"
+            : `Predict real fold for chain ${activeChain.id} (ESMFold)`}
         </button>
 
         <div

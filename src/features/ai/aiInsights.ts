@@ -1,3 +1,5 @@
+import { postJson } from "../../lib/http";
+
 export interface FunctionalSite {
   label: string;
   chain: string;
@@ -67,26 +69,14 @@ interface AIInsightsRequest {
  *   }
  */
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_URL ??
-  "http://localhost:8000/api";
-
 export async function getAIInsights(
   request: AIInsightsRequest,
 ): Promise<DetailedAIInsights> {
-  const response = await fetch(`${API_BASE_URL}/ai/insights/cached`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(request),
-  });
-
-  if (!response.ok) {
-    throw new Error(
-      "Failed to generate AI insights.",
-    );
-  }
-
-  return response.json();
+  // The server fetches the authoritative sequence from RCSB itself.
+  const { pdbId, chainId, forceRefresh } = request;
+  return postJson<DetailedAIInsights>(
+    "/ai/insights/cached",
+    { pdbId, chainId, forceRefresh },
+    { fallbackError: "Failed to generate AI insights." },
+  );
 }

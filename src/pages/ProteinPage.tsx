@@ -1,11 +1,13 @@
 import {
   useEffect,
+  useMemo,
   useState,
 } from "react";
 import { Link, useParams } from "react-router-dom";
 import AnalysisPanel from "../features/analysis/AnalysisPanel";
 
 import ProteinViewer, {
+  type PickedResidue,
   type ResidueInfo,
 } from "../features/proteins/ProteinViewer";
 
@@ -35,11 +37,15 @@ function ProteinPage() {
       {},
     );
 
-  const [selectedResidue, setSelectedResidue] =
+    const [selectedResidue, setSelectedResidue] =
     useState<{
       chain: string;
       residue: number;
     } | null>(null);
+  const [pickedResidue, setPickedResidue] =
+    useState<PickedResidue | null>(null);
+  const [analysisChain, setAnalysisChain] =
+    useState<string | null>(null);
 
   const [protein, setProtein] =
     useState<ProteinMetadata | null>(null);
@@ -60,30 +66,56 @@ function ProteinPage() {
   //   [],
   // );
 
-  useEffect(() => {
+    useEffect(() => {
     if (!pdbId) return;
 
-    async function getProteindata(){
-      setLoading(true);
-      setError("");
-      try {
-        getProteinMetadata(pdbId as string)
-          .then(setProtein)
-          .catch(() => {
-            setError(
-              "Unable to load protein metadata.",
-            );
-          })
-          .finally(() => {
-            setLoading(false);
-          });
-      } catch (error) {
-        console.log(error);
-      }
-    }
+    // Ignore results from a previous PDB ID if the user navigates quickly.
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    setProtein(null);
+    setAnalysisChain(null);
+    setPickedResidue(null);
+    setSelectedResidue(null);
 
-    getProteindata();
+    getProteinMetadata(pdbId)
+      .then((data) => {
+        if (!cancelled) setProtein(data);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setError(
+          err instanceof Error && err.message.includes("not found")
+            ? `No PDB entry named ${pdbId.toUpperCase()}.`
+            : "Unable to load protein metadata.",
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [pdbId]);
+
+  // Only polypeptide chains can go through DSSP / AI analysis (skip DNA/RNA chains).
+  const proteinChains = useMemo(
+    () =>
+      (protein?.chains ?? []).filter(
+        (chain) =>
+          !chain.polymerType ||
+          chain.polymerType.toLowerCase().startsWith("polypeptide"),
+      ),
+    [protein],
+  );
+  const activeAnalysisChain =
+    proteinChains.find((chain) => chain.id === analysisChain) ??
+    proteinChains[0];
+  const activeAnalysisResult =
+    analysisResult?.chain_id === activeAnalysisChain?.id
+      ? analysisResult
+      : null;
 
   if (!pdbId) {
     return (
@@ -113,12 +145,12 @@ function ProteinPage() {
             {error}
           </div>
 
-          <a
-            href="/"
+                    <Link
+            to="/"
             className="mt-4 inline-block rounded text-xs text-white/60 outline-none hover:text-white focus-visible:ring-2 focus-visible:ring-white/40"
           >
             ← Return to Proteus
-          </a>
+          </Link>
         </div>
       </div>
     );
@@ -135,12 +167,12 @@ function ProteinPage() {
     <div className="min-h-screen bg-[#05070a] text-white">
       {/* Header */}
       <header className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-4 py-3 sm:h-16 sm:py-0 sm:px-6">
-        <a
-          href="/"
+                <Link
+          to="/"
           className="rounded text-base font-semibold tracking-[0.25em] outline-none focus-visible:ring-2 focus-visible:ring-white/40 sm:text-lg sm:tracking-[0.3em]"
         >
           PROTEUS
-        </a>
+        </Link>
 
         <div className="flex items-center gap-3">
           <div className="font-mono text-xs text-white/40">
@@ -178,7 +210,8 @@ function ProteinPage() {
           <ProteinViewer
             pdbId={pdbId}
             selectedResidue={selectedResidue}
-            onResidueMap={setResidueMap}
+                        onResidueMap={setResidueMap}
+            onResidueClick={setPickedResidue}
             dsspResult={analysisResult}
             // pdbData={pdbData}
           />
@@ -221,19 +254,28 @@ function ProteinPage() {
           {/* Analysis */}
           {activeTab === "analysis" && protein && (
             <div className="absolute inset-0 z-50 bg-[#05070a]">
-              <AnalysisPanel
+                            <AnalysisPanel
                 pdbId={pdbId}
-                sequence={protein.chains[0]?.sequence}
-                chainId={protein.chains[0]?.id}
-                result={analysisResult}
+                sequence={activeAnalysisChain?.sequence}
+                chainId={activeAnalysisChain?.id}
+                chains={
+                  proteinChains.length > 1
+                    ? proteinChains.map((chain) => chain.id)
+                    : undefined
+                }
+                analyzedChains={
+                  analysisResult
+                    ? [analysisResult.chain_id]
+                    : []
+                }
+                onChainChange={setAnalysisChain}
+                result={activeAnalysisResult}
                 loading={analysisLoading}
                 error={analysisError}
                 onRunAnalysis={() => {
                   const chainId =
-                    protein.chains[0]?.id;
-
+                    activeAnalysisChain?.id;
                   if (!chainId) return;
-
                   runAnalysis(
                     pdbId,
                     chainId,
@@ -292,10 +334,16 @@ function ProteinPage() {
               }
             />
 
-            <Metadata
+                        <Metadata
               label="METHOD"
               value={protein.method}
             />
+            {pickedResidue && (
+              <Metadata
+                label="SELECTED RESIDUE"
+                value={`${pickedResidue.resn} ${pickedResidue.residue} · chain ${pickedResidue.chain}`}
+              />
+            )}
 
             {protein.chains[0]?.organism && (
               <Metadata

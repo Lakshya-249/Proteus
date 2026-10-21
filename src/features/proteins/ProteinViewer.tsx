@@ -460,7 +460,7 @@ function ProteinViewer({
         </button>
       </div>
 
-      <div className="absolute bottom-6 right-6 z-20 hidden font-mono text-[10px] text-white/30 xl:block">
+      <div className="absolute bottom-16 right-6 z-20 hidden font-mono text-[10px] text-white/30 xl:block">
         DRAG TO ROTATE · SCROLL TO ZOOM · CLICK A RESIDUE
       </div>
     </div>

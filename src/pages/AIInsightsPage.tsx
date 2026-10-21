@@ -252,7 +252,7 @@ export default function AIInsightsPage() {
                   </div>
                 </div>
                 <span className="tracking-[0.2em] animate-pulse">
-                  CALCULATING ACTIVE SITES VIA GEMINI...
+                  CALCULATING ACTIVE SITES...
                 </span>
               </div>
             )}
